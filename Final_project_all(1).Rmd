@@ -1,0 +1,374 @@
+---
+title: "Flight delay_Data mining final project"
+output: pdf_document
+date: "2023-04-24"
+---
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+library(ggstatsplot)
+library(e1071)
+library(caTools)
+library(caret)
+library(fastDummies)
+library(rsample)
+library(foreach)
+```
+
+# Original Data Overview
+
+```{r results = FALSE, message=FALSE, echo=FALSE}
+
+flight_Orig <- as.data.frame(read.csv("Flight Data_Original",head = TRUE))
+#50205 obs 19 vars
+
+## delete irrelevant input variables
+flight_Orig <- flight_Orig[, -which(names(flight_Orig) %in% c("CONCURRENT_FLIGHTS","NUMBER_OF_SEATS","AIRLINE_AIRPORT_FLIGHTS_MONTH","AVG_MONTHLY_PASS_AIRLINE","FLT_ATTENDANTS_PER_PASS","PLANE_AGE","TMAX"))]
+
+## Original Data Overview
+summary(flight_Orig)
+print(sd(flight_Orig$DISTANCE_GROUP))
+
+print(sd(flight_Orig$AIRLINE_FLIGHTS_MONTH))
+
+print(sd(flight_Orig$AVG_MONTHLY_PASS_AIRPORT))
+
+print(sd(flight_Orig$GROUND_SERV_PER_PASS))
+
+print(sd(flight_Orig$PRCP))
+
+print(sd(flight_Orig$SNOW))
+
+print(sd(flight_Orig$SNWD))
+
+print(sd(flight_Orig$AWND))
+
+## Draw correlation graph
+X <- select_if(flight_Orig, is.numeric)
+X = scale(X, center=TRUE, scale=TRUE)
+mu = attr(X,"scaled:center")
+sigma = attr(X,"scaled:scale")
+
+round(cor(X),
+  digits = 2)
+ggcorrplot::ggcorrplot(cor(X),  
+  outline.color = "gray",
+  hc.order = FALSE,
+  hc.method = "complete",
+  lab = FALSE,
+  lab_col = "black",
+  lab_size = 4,
+  p.mat = NULL,
+  sig.level = 0.05,
+  insig = c("pch", "blank"),
+  pch = 4,
+  pch.col = "black",
+  pch.cex = 5,
+  tl.cex = 5,
+  tl.col = "black",
+  tl.srt = 20,
+  digits = 2,
+  as.is = FALSE
+)
+
+## Original categorical inputs
+# DAY_OF_WEEK
+ggplot(data=flight_Orig, aes(x=DAY_OF_WEEK, y=DEP_DEL15))+
+  geom_bar(stat="identity",fill="orange")+
+  ggtitle("Day of Week")+
+  theme_light()+
+   coord_flip()
+
+# DEP_BLOCK
+ggplot(data=flight_Orig, aes(x=DEP_BLOCK, y=DEP_DEL15))+
+  geom_bar(stat="identity",fill="orange")+
+  ggtitle("Flight Leaving Time")+
+  theme_light()+
+     coord_flip()
+  
+
+# CARRIER_NAME
+ggplot(data=flight_Orig, aes(x=CARRIER_NAME, y=DEP_DEL15),xlim= c(0,0.5))+
+  geom_bar(stat="identity",fill="orange")+
+  ggtitle("Carrier Name")+
+  theme_light()+
+  coord_flip()
+
+# Deaparting Airport
+number<-flight_Orig%>%
+  group_by(DEPARTING_AIRPORT)%>%
+  mutate(counts=count(DEP_DEL15))%>%
+  ungroup()
+
+qmplot(LONGITUDE,LATITUDE, data =flight_Orig, color =number$counts, size = I(2), darken = .2) +
+  xlab("Longitude") + ylab("Latitude") +
+  ggtitle("Distribution of Departing Airport") +
+  scale_colour_gradient(low = "dark blue", high = "yellow")+
+  labs(color = "Delay Counts")
+
+flight_Orig <- flight_Orig[, -which(names(flight_Orig) %in% c("LATITUDE","LONGITUDE"))]
+
+```
+
+
+# Data Cleaning
+```{r results = FALSE, message=FALSE, echo=FALSE}
+flight_Orig <- as.data.frame(read.csv("Flight Data_Original",head = TRUE))
+
+na.outlier <- function(x,time.iqr=1.5) {
+  outlier.low <- quantile(x,probs=c(0.25))-IQR(x)*time.iqr
+  outlier.high <- quantile(x,probs=c(0.75))+IQR(x)*time.iqr
+  x[which(x>outlier.high | x<outlier.low)]<-NA
+  x
+}
+
+flight_data$DISTANCE_GROUP <- na.outlier(flight_data$DISTANCE_GROUP)
+flight_data$AIRLINE_FLIGHTS_MONTH <- na.outlier(flight_data$AIRLINE_FLIGHTS_MONTH)
+flight_data$AVG_MONTHLY_PASS_AIRPORT <- na.outlier(flight_data$AVG_MONTHLY_PASS_AIRPORT)
+flight_data$GROUND_SERV_PER_PASS <- na.outlier(flight_data$GROUND_SERV_PER_PASS)
+flight_data$AWND <- na.outlier(flight_data$AWND)
+
+flight_clean <- na.omit(flight_data)
+
+## save clean dateset
+write.csv(flight_clean, "flight_clean.csv", row.names = FALSE) 
+#41057 obs 14 vars
+```
+
+```{r results = FALSE, message=FALSE, echo=FALSE}
+flight_data <- as.data.frame(read.csv("flight_clean.csv",head = TRUE))
+```
+# Model Running
+
+## Logit Regression
+
+```{r results = FALSE, message=FALSE, echo=FALSE}
+
+flight_data <-na.omit(flight_data)
+
+#convert some int to character
+flight_data$DAY_OF_WEEK =as.character(as.integer(flight_data$DAY_OF_WEEK))
+
+rmse_lm = foreach(i = c(1:20), .combine='rbind') %do% {
+  #split the data
+  flight_split =  initial_split(flight_data, prop=0.8)
+  flight_train = training(flight_split)
+  flight_test  = testing(flight_split)
+  
+  logit<-glm(DEP_DEL15~DAY_OF_WEEK+DISTANCE_GROUP+DEP_BLOCK+
+               CARRIER_NAME+AIRLINE_FLIGHTS_MONTH+
+               AVG_MONTHLY_PASS_AIRPORT+GROUND_SERV_PER_PASS +
+               DEPARTING_AIRPORT +PREVIOUS_AIRPORT+PRCP+SNOW+SNWD+AWND, data = flight_train,family = binomial(link = "logit"))
+  
+  rmse(logit, flight_test)
+  
+  flight_test1<-flight_test[,c(-2)]
+  flight_train1<-flight_test[,c(-2)]
+  y_predict_log <- predict(logit, flight_test1)
+  y_predict_log1<-ifelse(y_predict_log>0.5,1,0)
+  accuracy_log <- confusionMatrix(data=as.factor(y_predict1), reference = as.factor(al_test$DEP_DEL15))
+} %>% as.data.frame  
+
+accuracy_log
+
+rmse_lm_medium = mean(rmse_lm$V1)
+rmse_lm_medium
+
+
+```
+
+## KNN
+
+```{r results = FALSE, message=FALSE, echo=FALSE}
+rmse_kn = foreach(i = c(1:20), .combine='rbind') %do% {
+  
+flight_split =  initial_split(flight_Clean, prop=0.8)
+flight_train = training(flight_split)
+flight_test  = testing(flight_split)
+
+#Normalize
+Xtrain = model.matrix(~ . - (DEP_DEL15) - 1, data=flight_train)
+Xtest = model.matrix(~ . - (DEP_DEL15) - 1, data=flight_test)
+
+
+# training and testing set responses
+ytrain = flight_train$DEP_DEL15
+ytest = flight_test$DEP_DEL15
+
+#now rescale:
+# columns to scale
+cols_to_scale <- c(8, 29, 30, 31, 114, 115, 116, 117)
+
+Xtrain1<- Xtrain[,c(-8, -29, -30, -31, -114, -115, -116, -117)]
+
+scale_train = apply(Xtrain, 2, sd)  # calculate std dev for each column
+Xtilde_train = scale(Xtrain, scale = scale_train)
+Xtilde_train1<-Xtilde_train[,c(8, 29, 30, 31, 114, 115, 116, 117)]
+train_cl<-cbind(Xtrain1,Xtilde_train1)
+
+Xtest1<- Xtest[,c(-8, -29, -30, -31, -114, -115, -116, -117)]
+Xtilde_test = scale(Xtest, scale = scale_train)
+Xtilde_test1<-Xtilde_test[,c(8, 29, 30, 31, 114, 115, 116, 117)]# use the testing set scales!
+test_cl<-cbind(Xtest1,Xtilde_test1)
+
+#run the KNN model
+ctrl <- trainControl(method="repeatedcv", number = 10, repeats = 3)
+ytrain <- ytrain
+
+knnfit <- train(train_cl,
+                ytrain,
+                method = "knn",
+                trControl = ctrl,
+                tunelenth = 10)
+
+#knnfit
+
+y_predict_knn <- predict(knnfit, test_cl)
+
+
+c(RMSE(ytest, y_predict_knn))
+} %>% as.data.frame 
+
+rmse_kn_medium = mean(rmse_kn$V1)
+rmse_kn_medium
+
+y_predict_knn1<-ifelse(y_predict_knn>0.5,1,0)
+
+accuracy_knn <- confusionMatrix(data=as.factor(y_predict_knn1), reference = as.factor(ytest))
+accuracy_knn
+
+
+```
+# Random Forest
+
+```{r results = FALSE, message=FALSE, echo=FALSE}
+flight_Clean <- dummy_cols(flight_Clean, select_columns = "DAY_OF_WEEK")#7
+flight_Clean <- dummy_cols(flight_Clean, select_columns = "DEP_BLOCK")##6
+flight_Clean <- dummy_cols(flight_Clean, select_columns = "CARRIER_NAME")#16
+flight_Clean <- dummy_cols(flight_Clean, select_columns = "DEPARTING_AIRPORT")#82
+flight_Clean <- flight_Clean[, -which(names(flight_Clean) %in% c("DAY_OF_WEEK", "DEP_BLOCK", "CARRIER_NAME","DEPARTING_AIRPORT"))]
+##121 varibales (120 inputs, 1 output)
+
+
+rmse_random_forset = foreach(i = c(1:20), .combine='rbind') %do% {
+ flight_split =  initial_split(flight_Clean, prop=0.8)
+flight_train = training(flight_split)
+flight_test  = testing(flight_split)
+
+    # training and testing set responses
+  ytrain <- flight_train$DEP_DEL15
+  ytest <- flight_test$DEP_DEL15
+    
+    #now rescale:
+  xtrain_cols_to_scale <- subset(flight_train, select=c("AIRLINE_FLIGHTS_MONTH","DISTANCE_GROUP","AVG_MONTHLY_PASS_AIRPORT","GROUND_SERV_PER_PASS","PRCP","SNOW","SNWD","AWND"))
+  xtest_cols_to_scale <- subset(flight_test, select=c("AIRLINE_FLIGHTS_MONTH","DISTANCE_GROUP","AVG_MONTHLY_PASS_AIRPORT","GROUND_SERV_PER_PASS","PRCP","SNOW","SNWD","AWND"))
+  scale_train <- apply(xtrain_cols_to_scale, 2, sd)     # calculate std dev for each column
+  Xtilde_train <- scale(xtrain_cols_to_scale, scale = scale_train)
+  Xtilde_test <- scale(xtest_cols_to_scale, scale = scale_train)  # use the training set scales!
+  
+  head(flight_train)
+  
+  xtrain_dummy <- subset(flight_train, select=c(6, 11:121))## including 111 categorical dummies+1 previous airport
+  xtest_dummy <- subset(flight_test, select=c(6, 11:121))
+  train_all <- cbind(ytrain, Xtilde_train, xtrain_dummy)# 120 inputs+1 output
+  test_all <- cbind(ytest, Xtilde_test, xtest_dummy)
+  train_x <- cbind(Xtilde_train, xtrain_dummy) #only includes 120 inputs
+  test_x <- cbind(Xtilde_test, xtest_dummy)
+  
+colnames(train_all) <- gsub(" ", "_", colnames(train_all))
+colnames(train_all) <- gsub(",_", "_", colnames(train_all))
+colnames(train_all) <- gsub("_-_", "_", colnames(train_all))
+colnames(train_all) <- gsub("_O'", "_", colnames(train_all))
+colnames(train_all) <- gsub("/", "_", colnames(train_all))
+colnames(train_all) <- gsub("-", "_", colnames(train_all))
+
+colnames(test_all) <- gsub(" ", "_", colnames(test_all))
+colnames(test_all) <- gsub(",_", "_", colnames(test_all))
+colnames(test_all) <- gsub("_-_", "_", colnames(test_all))
+colnames(test_all) <- gsub("_O'", "_", colnames(test_all))
+colnames(test_all) <- gsub("/", "_", colnames(test_all))
+colnames(test_all) <- gsub("-", "_", colnames(test_all))
+
+colnames(test_x) <- gsub(" ", "_", colnames(test_x))
+colnames(test_x) <- gsub(",_", "_", colnames(test_x))
+colnames(test_x) <- gsub("_-_", "_", colnames(test_x))
+colnames(test_x) <- gsub("_O'", "_", colnames(test_x))
+colnames(test_x) <- gsub("/", "_", colnames(test_x))
+colnames(test_x) <- gsub("-", "_", colnames(test_x))
+    
+  #run the Random Forest model
+  
+flight_forest <- randomForest(ytrain ~ ., data = train_all, control = rpart.control(cp = 0.00001), importance=TRUE)
+
+    #Random Rorest
+
+y_predict_forest = predict(flight_forest, newdata=test_x)
+
+y_predict_forest
+
+test_all$ytest
+
+} %>% as.data.frame 
+
+y_predict_forest <- ifelse(y_predict_forest > 0.5, 1, 0)
+y_predict_forest
+
+
+accuracy_forst <- confusionMatrix(data=as.factor(y_predict_forest), reference = as.factor(ytest))
+  c(RMSE(ytest, as.numeric(y_predict_forest)), accuracy_forst$overall[1])
+  
+rmse_randome_medium = mean(rmse_random_forset$V1)
+rmse_random_medium
+
+
+```
+
+## Naive Bayers 
+
+```{r, include=FALSE}
+
+naive_model = foreach(i = c(1:20), .combine='rbind') %do% {
+  flight_split <- initial_split(flight_data, prop = 0.8)
+  flight_train <- training(flight_split)
+  flight_test <- testing(flight_split)
+    
+    # training and testing set responses
+  ytrain <- flight_train$DEP_DEL15
+  ytest <- flight_test$DEP_DEL15
+    
+    #now rescale:
+  xtrain_cols_to_scale <- subset(flight_train, select=c(3, 6, 7, 8, 13, 14, 15, 16))
+  xtest_cols_to_scale <- subset(flight_test, select=c(3, 6, 7, 8, 13, 14, 15, 16))
+  scale_train <- apply(xtrain_cols_to_scale, 2, sd)     # calculate std dev for each column
+  Xtilde_train <- scale(xtrain_cols_to_scale, scale = scale_train)
+  Xtilde_test <- scale(xtest_cols_to_scale, scale = scale_train)  # use the training set scales!
+  xtrain_dummy <- subset(flight_train, select=c(12, 17:127))
+  xtest_dummy <- subset(flight_test, select=c(12, 17:127))
+  train_all <- cbind(ytrain, Xtilde_train, xtrain_dummy)
+  test_all <- cbind(ytest, Xtilde_test, xtest_dummy)
+  train_x <- cbind(Xtilde_train, xtrain_dummy)
+  test_x <- cbind(Xtilde_test, xtest_dummy)
+    #run the KNN model
+  classifier_fl <- naiveBayes(ytrain ~ ., data = train_all)
+    #knnfit
+  classifier_fl
+  y_predict_na <- predict(classifier_fl, test_x)
+  y_predict_na
+  
+  accuracy_na <- confusionMatrix(data=y_predict_na, reference = as.factor(ytest))
+  c(RMSE(ytest, as.numeric(y_predict_na)), spam$overall[1])
+} %>% as.data.frame 
+
+accuracy_naive_mean = mean(naive_model$Accuracy)
+rmse_naive_mean = mean(naive_model$V1)
+rmse_naive_mean
+```
+
+```{r}
+accuracy_na$table
+```
+
+
+```
